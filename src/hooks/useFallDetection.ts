@@ -1,83 +1,108 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import type { Keypoint } from "./useWifiSensing";
+import type { MLClassification } from "./useWifiSensing";
 
-const HEAD_IDX = 0;
-const FALL_Y_THRESHOLD = 0.35;    // head below this height = floor-level
-const VELOCITY_THRESHOLD = -0.8;  // m/s — rapid downward drop
-const FALL_HOLD_MS = 3000;        // must stay low for 3 s to confirm
+const LONG_LIE_THRESHOLD_MS = 60000;
 
 export interface FallDetectionResult {
   isFallDetected: boolean;
-  headVelocity: number;  // m/s (negative = falling)
-  headY: number;
+  isLongLie: boolean;
+  fallDuration: number; // in seconds
   dismiss: () => void;
 }
 
-export function useFallDetection(keypoints: Keypoint[]): FallDetectionResult {
+export function useFallDetection(
+  mlClassification?: MLClassification,
+  confidenceScore?: number
+): FallDetectionResult {
   const [isFallDetected, setIsFallDetected] = useState(false);
-  const headYRef = useRef<number>(1.7);
-  const prevHeadYRef = useRef<number>(1.7);
-  const prevTimeRef = useRef<number>(Date.now());
-  const velocityRef = useRef<number>(0);
-  const lowStartRef = useRef<number | null>(null);  // timestamp when head went low
+  const [isLongLie, setIsLongLie] = useState(false);
+  const [fallDuration, setFallDuration] = useState(0);
+
+  const fallStartTimeRef = useRef<number | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const dismissedRef = useRef(false);
+
+  const clearFallTimers = useCallback(() => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+    fallStartTimeRef.current = null;
+    setFallDuration(0);
+  }, []);
 
   const dismiss = useCallback(() => {
     setIsFallDetected(false);
+    setIsLongLie(false);
+    clearFallTimers();
     dismissedRef.current = true;
-    lowStartRef.current = null;
-    // Allow re-detection after 5 s
+    
+    // Prevent immediate re-triggering for 5 seconds
     setTimeout(() => {
       dismissedRef.current = false;
     }, 5000);
-  }, []);
+  }, [clearFallTimers]);
 
   useEffect(() => {
-    const head = keypoints[HEAD_IDX];
-    if (!head || head.confidence < 0.3) return;
-
-    const now = Date.now();
-    const dt = Math.max((now - prevTimeRef.current) / 1000, 0.016); // seconds
-    const currentY = head.y;
-    const velocity = (currentY - prevHeadYRef.current) / dt;
-
-    // Smooth velocity with low-pass filter (EMA α=0.4)
-    velocityRef.current = velocityRef.current * 0.6 + velocity * 0.4;
-
-    prevHeadYRef.current = currentY;
-    prevTimeRef.current = now;
-    headYRef.current = currentY;
-
-    if (dismissedRef.current || isFallDetected) return;
-
-    const isLow = currentY < FALL_Y_THRESHOLD;
-    const isRapid = velocityRef.current < VELOCITY_THRESHOLD;
-
-    if (isLow) {
-      if (lowStartRef.current === null) {
-        // Start timing the low period only if there was a rapid drop recently
-        if (isRapid) {
-          lowStartRef.current = now;
-        } else {
-          // Gentle low detection (e.g. person sitting slowly)
-          lowStartRef.current = now;
-        }
-      } else {
-        const lowDuration = now - lowStartRef.current;
-        if (lowDuration >= FALL_HOLD_MS) {
-          setIsFallDetected(true);
-        }
-      }
-    } else {
-      // Head rose again — reset low timer
-      lowStartRef.current = null;
+    // Treat undefined confidence as 1.0 (for default states without ML payload yet)
+    const confidence = confidenceScore ?? 1.0;
+    
+    // Ignore classifications with low confidence
+    if (confidence < 0.75) {
+      return;
     }
-  }, [keypoints, isFallDetected]);
+
+    if (dismissedRef.current) {
+      return;
+    }
+
+    const isFallenState = mlClassification === "FALL" || mlClassification === "STATIC_FLOOR";
+
+    if (isFallenState) {
+      if (fallStartTimeRef.current === null) {
+        // Start tracking the fall
+        fallStartTimeRef.current = Date.now();
+        setIsFallDetected(true);
+        
+        // Start a timer to update the duration and check for Long Lie
+        intervalRef.current = setInterval(() => {
+          if (fallStartTimeRef.current) {
+            const elapsed = Date.now() - fallStartTimeRef.current;
+            setFallDuration(Math.floor(elapsed / 1000));
+            
+            if (elapsed >= LONG_LIE_THRESHOLD_MS) {
+              setIsLongLie(true);
+            }
+          }
+        }, 1000);
+      }
+    } else if (mlClassification === "NORMAL" || mlClassification === "EMPTY") {
+      // Person recovered or left the room
+      if (isFallDetected || isLongLie) {
+        setIsFallDetected(false);
+        setIsLongLie(false);
+        clearFallTimers();
+      }
+    }
+
+    // Cleanup on unmount or dependency change
+    return () => {
+      if (!isFallenState && intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, [mlClassification, confidenceScore, isFallDetected, isLongLie, clearFallTimers]);
+
+  // Clean up on unmount
+  useEffect(() => {
+    return clearFallTimers;
+  }, [clearFallTimers]);
 
   return {
     isFallDetected,
-    headVelocity: velocityRef.current,
-    headY: headYRef.current,
+    isLongLie,
+    fallDuration,
     dismiss,
   };
 }

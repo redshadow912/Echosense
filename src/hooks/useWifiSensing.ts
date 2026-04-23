@@ -1,5 +1,6 @@
-
 import { useEffect, useRef, useState, useCallback } from "react";
+
+export type MLClassification = "EMPTY" | "NORMAL" | "FALL" | "STATIC_FLOOR";
 
 export interface Keypoint {
   x: number;
@@ -16,6 +17,8 @@ export interface Vitals {
 export interface SensingData {
   vitals: Vitals;
   keypoints: Keypoint[];
+  mlClassification?: MLClassification;
+  confidenceScore?: number;
 }
 
 export type ConnectionStatus =
@@ -75,25 +78,58 @@ function generateMockData(t: number): SensingData {
   const wave = Math.sin(t * 0.002);
   const slowWave = Math.sin(t * 0.0005);
 
-  const keypoints: Keypoint[] = MOCK_KEYPOINTS.map((kp, i) => ({
-    x: kp.x + Math.sin(t * 0.001 + i * 0.5) * 0.015,
-    y: kp.y + Math.cos(t * 0.0008 + i * 0.3) * 0.01,
-    z: kp.z + Math.sin(t * 0.0012 + i * 0.7) * 0.008,
-    confidence: kp.confidence,
-  }));
+  // Cycle through states to test the Long Lie state machine (120s cycle)
+  // 0-20s: NORMAL
+  // 20-30s: FALL
+  // 30-100s: STATIC_FLOOR (70s duration, triggers Long Lie at 90s total)
+  // 100-120s: EMPTY
+  const cycleTime = t % 120000;
+  let mlClassification: MLClassification = "NORMAL";
+  let confidenceScore = 0.95;
+  let yOffset = 0;
+
+  if (cycleTime < 20000) {
+    mlClassification = "NORMAL";
+    yOffset = 0;
+  } else if (cycleTime < 30000) {
+    mlClassification = "FALL";
+    // Simulate dropping down
+    const dropProgress = (cycleTime - 20000) / 10000;
+    yOffset = -1.4 * dropProgress; // Drop down by up to 1.4m
+  } else if (cycleTime < 100000) {
+    mlClassification = "STATIC_FLOOR";
+    yOffset = -1.4; // On the floor
+  } else {
+    mlClassification = "EMPTY";
+    yOffset = 0;
+    confidenceScore = 0.8;
+  }
+
+  const keypoints: Keypoint[] = mlClassification === "EMPTY" 
+    ? DEFAULT_KEYPOINTS 
+    : MOCK_KEYPOINTS.map((kp, i) => ({
+        x: kp.x + Math.sin(t * 0.001 + i * 0.5) * 0.015,
+        y: kp.y + yOffset + Math.cos(t * 0.0008 + i * 0.3) * 0.01,
+        z: kp.z + Math.sin(t * 0.0012 + i * 0.7) * 0.008,
+        confidence: kp.confidence,
+      }));
 
   return {
     vitals: {
-      heartRate: Math.round(72 + wave * 8),
-      breathingRate: Math.round(15 + slowWave * 3),
+      heartRate: mlClassification === "EMPTY" ? 0 : Math.round(72 + wave * 8),
+      breathingRate: mlClassification === "EMPTY" ? 0 : Math.round(15 + slowWave * 3),
     },
     keypoints,
+    mlClassification,
+    confidenceScore,
   };
 }
 
 const INITIAL_DATA: SensingData = {
   vitals: { heartRate: 72, breathingRate: 15 },
   keypoints: DEFAULT_KEYPOINTS,
+  mlClassification: "NORMAL",
+  confidenceScore: 1.0,
 };
 
 export function useWifiSensing(url: string = "ws://localhost:3000/ws/sensing") {
@@ -146,9 +182,23 @@ export function useWifiSensing(url: string = "ws://localhost:3000/ws/sensing") {
 
       ws.onmessage = (event) => {
         try {
-          const parsed: SensingData = JSON.parse(event.data as string);
+          const parsed = JSON.parse(event.data as string);
+          
           if (parsed?.vitals && Array.isArray(parsed?.keypoints)) {
-            setData(parsed);
+            const validData: SensingData = {
+              vitals: parsed.vitals,
+              keypoints: parsed.keypoints,
+            };
+            
+            // Safely extract ML payload if it exists
+            if (typeof parsed.mlClassification === "string") {
+              validData.mlClassification = parsed.mlClassification as MLClassification;
+            }
+            if (typeof parsed.confidenceScore === "number") {
+              validData.confidenceScore = parsed.confidenceScore;
+            }
+
+            setData(validData);
           }
         } catch {
           // ignore malformed messages

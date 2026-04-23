@@ -32,8 +32,11 @@ function appendPoint(prev: ChartPoint[], value: number): ChartPoint[] {
 
 export default function DashboardPage() {
   const { data, status } = useWifiSensing(WS_URL);
-  const { isFallDetected, headVelocity, headY, dismiss } = useFallDetection(
-    data?.keypoints ?? []
+  
+  // Edge AI ML Fall Detection hook
+  const { isFallDetected, isLongLie, fallDuration, dismiss } = useFallDetection(
+    data?.mlClassification,
+    data?.confidenceScore
   );
 
   // Chart history state
@@ -56,6 +59,8 @@ export default function DashboardPage() {
   const heartRate = data?.vitals?.heartRate ?? 72;
   const breathingRate = data?.vitals?.breathingRate ?? 15;
   const keypoints = data?.keypoints ?? [];
+  const mlState = data?.mlClassification ?? "NORMAL";
+  const confidence = data?.confidenceScore ?? 1.0;
 
   // Use a ref to avoid stale closure issues in the fast-update loop
   const hrRef = useRef(heartRate);
@@ -82,7 +87,7 @@ export default function DashboardPage() {
   return (
     <>
       {/* ── Fall Alert Overlay ─────────────────────────────────── */}
-      {isFallDetected && <CriticalFallAlert onDismiss={dismiss} />}
+      {isFallDetected && <CriticalFallAlert isLongLie={isLongLie} onDismiss={dismiss} />}
 
       <div
         className="min-h-screen flex flex-col"
@@ -115,7 +120,7 @@ export default function DashboardPage() {
                 EchoSense<span className="text-sky-400"> UI</span>
               </h1>
               <p className="text-[10px] text-slate-500 mt-0.5">
-                WiFi Sensing · Human Pose
+                Edge AI CSI Monitoring
               </p>
             </div>
           </div>
@@ -130,7 +135,7 @@ export default function DashboardPage() {
                 color: "#f87171",
               }}
             >
-              ⚠️ FALL DETECTED
+              ⚠️ {isLongLie ? "LONG LIE DETECTED" : "FALL DETECTED"}
             </div>
           )}
 
@@ -138,20 +143,20 @@ export default function DashboardPage() {
           <div className="flex items-center gap-4">
             <div className="hidden lg:flex items-center gap-3 text-xs text-slate-600">
               <span>
-                Head:{" "}
-                <span className="text-slate-400 tabular-nums">
-                  {headY.toFixed(2)}m
+                Edge AI:{" "}
+                <span className="text-slate-400 font-bold tracking-widest">
+                  {mlState}
                 </span>
               </span>
               <span>
-                Vel:{" "}
+                Conf:{" "}
                 <span
-                  className="tabular-nums"
+                  className="tabular-nums font-bold"
                   style={{
-                    color: headVelocity < -0.5 ? "#f87171" : "#94a3b8",
+                    color: confidence < 0.75 ? "#f87171" : "#34d399",
                   }}
                 >
-                  {headVelocity.toFixed(2)}m/s
+                  {(confidence * 100).toFixed(0)}%
                 </span>
               </span>
             </div>
@@ -276,16 +281,16 @@ export default function DashboardPage() {
           <div className="col-span-2 grid grid-cols-5 gap-2">
             {[
               {
-                label: "Keypoints",
-                value: `${detectedCount} / 17`,
-                icon: "📍",
-                color: "#38bdf8",
+                label: "Edge State",
+                value: mlState,
+                icon: "🧠",
+                color: mlState === "NORMAL" || mlState === "EMPTY" ? "#38bdf8" : "#f87171",
               },
               {
-                label: "Avg Confidence",
-                value: `${avgConf}%`,
+                label: "AI Confidence",
+                value: `${(confidence * 100).toFixed(0)}%`,
                 icon: "🎯",
-                color: "#34d399",
+                color: confidence >= 0.75 ? "#34d399" : "#f87171",
               },
               {
                 label: "HR Trend",
@@ -300,16 +305,16 @@ export default function DashboardPage() {
                   heartRate > 100 || heartRate < 60 ? "#f87171" : "#94a3b8",
               },
               {
-                label: "Head Height",
-                value: `${headY.toFixed(2)} m`,
-                icon: "📏",
-                color: headY < 0.35 ? "#f87171" : "#94a3b8",
+                label: "Fall Time",
+                value: isFallDetected ? `${fallDuration}s` : "0s",
+                icon: "⏱️",
+                color: fallDuration > 60 ? "#ef4444" : fallDuration > 0 ? "#f59e0b" : "#94a3b8",
               },
               {
                 label: "Fall Status",
-                value: isFallDetected ? "⚠️ Detected" : "✓ Safe",
+                value: isLongLie ? "🚨 LONG LIE" : isFallDetected ? "⚠️ Detected" : "✓ Safe",
                 icon: "🛡️",
-                color: isFallDetected ? "#f87171" : "#34d399",
+                color: isLongLie || isFallDetected ? "#f87171" : "#34d399",
               },
             ].map((stat) => (
               <div

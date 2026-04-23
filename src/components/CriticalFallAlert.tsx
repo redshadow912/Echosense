@@ -3,10 +3,11 @@
 import { useEffect, useRef } from "react";
 
 interface CriticalFallAlertProps {
+  isLongLie: boolean;
   onDismiss: () => void;
 }
 
-export default function CriticalFallAlert({ onDismiss }: CriticalFallAlertProps) {
+export default function CriticalFallAlert({ isLongLie, onDismiss }: CriticalFallAlertProps) {
   const audioCtxRef = useRef<AudioContext | null>(null);
 
   // Play a warning beep pattern
@@ -26,7 +27,9 @@ export default function CriticalFallAlert({ onDismiss }: CriticalFallAlertProps)
         osc.connect(gain);
         gain.connect(ctx.destination);
         osc.type = "square";
-        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        
+        // Use a more aggressive pitch for a Long Lie
+        osc.frequency.setValueAtTime(isLongLie ? 1100 : 880, ctx.currentTime);
         gain.gain.setValueAtTime(0.08, ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
         osc.start(ctx.currentTime);
@@ -37,22 +40,23 @@ export default function CriticalFallAlert({ onDismiss }: CriticalFallAlertProps)
     }
 
     beep();
-    interval = setInterval(beep, 1200);
+    // Beep much faster if it's a Long Lie
+    interval = setInterval(beep, isLongLie ? 400 : 1200);
 
     return () => {
       stopped = true;
       clearInterval(interval);
       audioCtxRef.current?.close();
     };
-  }, []);
+  }, [isLongLie]);
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
+      className="fixed inset-0 z-50 flex items-center justify-center transition-colors duration-500"
       style={{
         backdropFilter: "blur(8px) saturate(0.4)",
         WebkitBackdropFilter: "blur(8px) saturate(0.4)",
-        background: "rgba(127,0,0,0.55)",
+        background: isLongLie ? "rgba(180,0,0,0.7)" : "rgba(127,0,0,0.55)",
       }}
       id="fall-alert-overlay"
       role="alertdialog"
@@ -63,7 +67,7 @@ export default function CriticalFallAlert({ onDismiss }: CriticalFallAlertProps)
       <div className="absolute inset-0 pointer-events-none animate-ping"
         style={{
           background: "radial-gradient(circle at 50% 50%, rgba(239,68,68,0.25) 0%, transparent 70%)",
-          animationDuration: "1.2s",
+          animationDuration: isLongLie ? "0.6s" : "1.2s",
         }}
       />
 
@@ -72,8 +76,10 @@ export default function CriticalFallAlert({ onDismiss }: CriticalFallAlertProps)
         className="relative flex flex-col items-center gap-6 rounded-3xl px-12 py-10 mx-4 max-w-lg w-full"
         style={{
           background: "linear-gradient(145deg, rgba(20,4,4,0.98), rgba(60,6,6,0.95))",
-          border: "2px solid rgba(239,68,68,0.7)",
-          boxShadow: "0 0 80px rgba(239,68,68,0.5), 0 0 160px rgba(239,68,68,0.2), inset 0 1px 0 rgba(255,255,255,0.06)",
+          border: isLongLie ? "2px solid #ff0000" : "2px solid rgba(239,68,68,0.7)",
+          boxShadow: isLongLie 
+            ? "0 0 100px rgba(255,0,0,0.8), 0 0 200px rgba(255,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06)"
+            : "0 0 80px rgba(239,68,68,0.5), 0 0 160px rgba(239,68,68,0.2), inset 0 1px 0 rgba(255,255,255,0.06)",
         }}
       >
         {/* Warning icon — pulsing */}
@@ -82,7 +88,7 @@ export default function CriticalFallAlert({ onDismiss }: CriticalFallAlertProps)
           style={{
             background: "radial-gradient(circle, rgba(239,68,68,0.3), transparent)",
             border: "2px solid rgba(239,68,68,0.8)",
-            animationDuration: "0.8s",
+            animationDuration: isLongLie ? "0.4s" : "0.8s",
           }}
         >
           <span className="text-4xl" role="img" aria-label="Warning">⚠️</span>
@@ -94,24 +100,24 @@ export default function CriticalFallAlert({ onDismiss }: CriticalFallAlertProps)
             className="text-xs font-bold tracking-[0.3em] uppercase mb-2"
             style={{ color: "rgba(239,68,68,0.7)" }}
           >
-            EchoSense Alert
+            EchoSense ML Alert
           </p>
           <h2
             className="text-3xl font-black tracking-tight uppercase animate-pulse"
             style={{
-              color: "#fca5a5",
+              color: isLongLie ? "#ff5555" : "#fca5a5",
               textShadow: "0 0 30px rgba(239,68,68,0.8)",
-              animationDuration: "0.9s",
+              animationDuration: isLongLie ? "0.4s" : "0.9s",
             }}
           >
-            CRITICAL FALL
+            {isLongLie ? "LONG LIE" : "CRITICAL FALL"}
           </h2>
           <h2
             className="text-3xl font-black tracking-tight uppercase animate-pulse"
             style={{
               color: "#ef4444",
               textShadow: "0 0 30px rgba(239,68,68,0.8)",
-              animationDuration: "0.9s",
+              animationDuration: isLongLie ? "0.4s" : "0.9s",
             }}
           >
             DETECTED
@@ -127,9 +133,16 @@ export default function CriticalFallAlert({ onDismiss }: CriticalFallAlertProps)
           }}
         >
           <p className="text-sm text-red-300 leading-relaxed">
-            A person may have fallen and has remained on the floor for over{" "}
-            <strong className="text-red-400">3 seconds</strong>. Immediate
-            assistance may be required.
+            {isLongLie ? (
+              <>
+                A person has been on the floor for over <strong className="text-red-400">60 seconds</strong>. 
+                This is a high-risk medical emergency. Dispatching help immediately.
+              </>
+            ) : (
+              <>
+                A person may have fallen. Awaiting ML state recovery...
+              </>
+            )}
           </p>
         </div>
 
